@@ -1,0 +1,222 @@
+// Copyright (c) 2025 gaussian-vrm community
+// Licensed under the MIT License.
+
+/**
+ * GVRM Skinning Shader
+ *
+ * Implements Linear Blend Skinning (LBS) for Gaussian Splat avatars.
+ * Each splat is bound to a vertex on the VRM skeletal mesh, inheriting
+ * its bone influences and transforming with the skeleton.
+ *
+ * Based on the original GLSL implementation from gvrm.js:533-776
+ */
+
+#include "/Engine/Private/Common.ush"
+
+// Niagara Data Interface buffers (provided by NiagaraDataInterfaceGVRM)
+Buffer<float3> {NDIName}_VertexPositions;
+Buffer<float3> {NDIName}_VertexNormals;
+Buffer<int4> {NDIName}_BoneIndices;
+Buffer<float4> {NDIName}_BoneWeights;
+Buffer<float4x4> {NDIName}_BoneMatrices;
+int {NDIName}_NumVertices;
+
+// GVRM binding data (loaded from data.json)
+Buffer<int> SplatVertexIndices;      // Maps splat index to VRM vertex index
+Buffer<float3> SplatRelativePoses;   // Relative position from vertex to splat
+
+/**
+ * Quaternion multiplication
+ * q1 * q2 returns the combined rotation
+ */
+float4 QuaternionMultiply(float4 q1, float4 q2)
+{
+    return float4(
+        q1.w * q2.x + q1.x * q2.w + q1.y * q2.z - q1.z * q2.y,
+        q1.w * q2.y - q1.x * q2.z + q1.y * q2.w + q1.z * q2.x,
+        q1.w * q2.z + q1.x * q2.y - q1.y * q2.x + q1.z * q2.w,
+        q1.w * q2.w - q1.x * q2.x - q1.y * q2.y - q1.z * q2.z
+    );
+}
+
+/**
+ * Rotate a vector by a quaternion
+ */
+float3 RotateVectorByQuaternion(float3 v, float4 q)
+{
+    float3 qVec = q.xyz;
+    float qW = q.w;
+
+    float3 uv = cross(qVec, v);
+    float3 uuv = cross(qVec, uv);
+
+    return v + 2.0 * (uv * qW + uuv);
+}
+
+/**
+ * Extract rotation quaternion from a 4x4 transformation matrix
+ * Returns quaternion in (x, y, z, w) format
+ */
+float4 MatrixToQuaternion(float4x4 m)
+{
+    float trace = m[0][0] + m[1][1] + m[2][2];
+    float4 q;
+
+    if (trace > 0.0)
+    {
+        float s = 0.5 / sqrt(trace + 1.0);
+        q.w = 0.25 / s;
+        q.x = (m[2][1] - m[1][2]) * s;
+        q.y = (m[0][2] - m[2][0]) * s;
+        q.z = (m[1][0] - m[0][1]) * s;
+    }
+    else if (m[0][0] > m[1][1] && m[0][0] > m[2][2])
+    {
+        float s = 2.0 * sqrt(1.0 + m[0][0] - m[1][1] - m[2][2]);
+        q.w = (m[2][1] - m[1][2]) / s;
+        q.x = 0.25 * s;
+        q.y = (m[0][1] + m[1][0]) / s;
+        q.z = (m[0][2] + m[2][0]) / s;
+    }
+    else if (m[1][1] > m[2][2])
+    {
+        float s = 2.0 * sqrt(1.0 + m[1][1] - m[0][0] - m[2][2]);
+        q.w = (m[0][2] - m[2][0]) / s;
+        q.x = (m[0][1] + m[1][0]) / s;
+        q.y = 0.25 * s;
+        q.z = (m[1][2] + m[2][1]) / s;
+    }
+    else
+    {
+        float s = 2.0 * sqrt(1.0 + m[2][2] - m[0][0] - m[1][1]);
+        q.w = (m[1][0] - m[0][1]) / s;
+        q.x = (m[0][2] + m[2][0]) / s;
+        q.y = (m[1][2] + m[2][1]) / s;
+        q.z = 0.25 * s;
+    }
+
+    return normalize(q);
+}
+
+/**
+ * Compute skinned position using Linear Blend Skinning (LBS)
+ *
+ * @param VertexIndex - Index of the VRM mesh vertex this splat is bound to
+ * @param RelativePosition - Splat's position relative to the vertex (from data.json)
+ * @return Skinned world-space position of the splat
+ */
+float3 ComputeSkinnedPosition(int VertexIndex, float3 RelativePosition)
+{
+    // Get vertex's base position (T-pose or bind pose)
+    float3 VertexPosition = {NDIName}_VertexPositions[VertexIndex];
+
+    // Get bone influences for this vertex
+    int4 BoneIndices = {NDIName}_BoneIndices[VertexIndex];
+    float4 BoneWeights = {NDIName}_BoneWeights[VertexIndex];
+
+    // Compute weighted blend of bone transforms (LBS)
+    float3 SkinnedPosition = float3(0, 0, 0);
+    float4 BlendedRotation = float4(0, 0, 0, 0);
+
+    // Blend up to 4 bone influences
+    for (int i = 0; i < 4; i++)
+    {
+        int BoneIndex = BoneIndices[i];
+        float BoneWeight = BoneWeights[i];
+
+        if (BoneWeight > 0.0)
+        {
+            float4x4 BoneMatrix = {NDIName}_BoneMatrices[BoneIndex];
+
+            // Transform vertex position by this bone
+            float3 TransformedVertex = mul(float4(VertexPosition, 1.0), BoneMatrix).xyz;
+            SkinnedPosition += TransformedVertex * BoneWeight;
+
+            // Accumulate rotation quaternion (weighted)
+            float4 BoneRotation = MatrixToQuaternion(BoneMatrix);
+            BlendedRotation += BoneRotation * BoneWeight;
+        }
+    }
+
+    // Normalize the blended rotation quaternion
+    BlendedRotation = normalize(BlendedRotation);
+
+    // Rotate the relative position by the blended rotation
+    float3 RotatedRelativePos = RotateVectorByQuaternion(RelativePosition, BlendedRotation);
+
+    // Final splat position = skinned vertex position + rotated relative offset
+    return SkinnedPosition + RotatedRelativePos;
+}
+
+/**
+ * Compute skinned rotation quaternion for splat orientation
+ * Used to transform the Gaussian covariance matrix
+ *
+ * @param VertexIndex - Index of the VRM mesh vertex this splat is bound to
+ * @return Rotation quaternion in world space
+ */
+float4 ComputeSkinnedRotation(int VertexIndex)
+{
+    // Get bone influences for this vertex
+    int4 BoneIndices = {NDIName}_BoneIndices[VertexIndex];
+    float4 BoneWeights = {NDIName}_BoneWeights[VertexIndex];
+
+    // Blend rotation quaternions from all influencing bones
+    float4 BlendedRotation = float4(0, 0, 0, 0);
+
+    for (int i = 0; i < 4; i++)
+    {
+        int BoneIndex = BoneIndices[i];
+        float BoneWeight = BoneWeights[i];
+
+        if (BoneWeight > 0.0)
+        {
+            float4x4 BoneMatrix = {NDIName}_BoneMatrices[BoneIndex];
+            float4 BoneRotation = MatrixToQuaternion(BoneMatrix);
+
+            // Weighted quaternion blending
+            BlendedRotation += BoneRotation * BoneWeight;
+        }
+    }
+
+    return normalize(BlendedRotation);
+}
+
+/**
+ * Main Niagara function: Update splat transform
+ * Called once per particle (splat) per frame
+ *
+ * @param SplatIndex - Particle/splat index
+ * @param OutPosition - Output: New world-space position
+ * @param OutRotation - Output: New rotation quaternion
+ */
+void UpdateSplatTransform(
+    int SplatIndex,
+    out float3 OutPosition,
+    out float4 OutRotation
+)
+{
+    // Get which VRM vertex this splat is bound to
+    int VertexIndex = SplatVertexIndices[SplatIndex];
+
+    // Get the splat's relative position from the binding data
+    float3 RelativePosition = SplatRelativePoses[SplatIndex];
+
+    // Compute skinned transforms
+    OutPosition = ComputeSkinnedPosition(VertexIndex, RelativePosition);
+    OutRotation = ComputeSkinnedRotation(VertexIndex);
+}
+
+/**
+ * Simplified position-only update for debugging or optimization
+ */
+void UpdateSplatPositionOnly(
+    int SplatIndex,
+    out float3 OutPosition
+)
+{
+    int VertexIndex = SplatVertexIndices[SplatIndex];
+    float3 RelativePosition = SplatRelativePoses[SplatIndex];
+
+    OutPosition = ComputeSkinnedPosition(VertexIndex, RelativePosition);
+}
