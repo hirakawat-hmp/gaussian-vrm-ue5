@@ -1,0 +1,35 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "GVRM Runtime",
+	"Description": "Runtime support for Gaussian-VRM (GVRM) animated avatars in Unreal Engine",
+	"Category": "Rendering",
+	"CreatedBy": "gaussian-vrm community",
+	"CreatedByURL": "https://github.com/hirakawat-hmp/gaussian-vrm-ue5",
+	"DocsURL": "https://github.com/hirakawat-hmp/gaussian-vrm-ue5/tree/main/ue5",
+	"MarketplaceURL": "",
+	"SupportURL": "https://github.com/hirakawat-hmp/gaussian-vrm-ue5/issues",
+	"CanContainContent": true,
+	"IsBetaVersion": true,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "GVRMRuntime",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [
+				"Win64",
+				"Mac",
+				"Linux"
+			]
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "Niagara",
+			"Enabled": true
+		}
+	]
+}
