@@ -1,0 +1,33 @@
+# Unreal Engine 5
+ue5/**/Intermediate/
+ue5/**/Saved/
+ue5/**/Binaries/
+ue5/**/*.uasset
+ue5/**/*.umap
+ue5/**/DerivedDataCache/
+ue5/**/.vs/
+ue5/**/.vscode/
+
+# Build artifacts
+ue5/**/Build/
+ue5/**/*.generated.h
+ue5/**/*.gen.cpp
+
+# Python
+ue5/Tools/__pycache__/
+ue5/Tools/*.pyc
+ue5/Tools/venv/
+ue5/Tools/.env
+
+# Output from conversion tools
+ue5/Tools/output/
+ue5/Tools/test_output/
+ue5/Import/
+
+# macOS
+.DS_Store
+
+# Editor temp files
+*~
+*.swp
+*.swo
