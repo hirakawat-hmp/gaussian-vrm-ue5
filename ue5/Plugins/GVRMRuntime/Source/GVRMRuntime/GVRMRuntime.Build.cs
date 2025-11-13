@@ -34,6 +34,8 @@ public class GVRMRuntime : ModuleRules
 				"Niagara",
 				"NiagaraCore",
 				"NiagaraShader",
+				"Json",
+				"JsonUtilities",
 			}
 		);
 

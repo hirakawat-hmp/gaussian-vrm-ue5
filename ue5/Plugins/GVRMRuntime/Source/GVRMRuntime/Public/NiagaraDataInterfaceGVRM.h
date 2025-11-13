@@ -38,6 +38,8 @@ public:
 	virtual bool GetFunctionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, const FNiagaraDataInterfaceGeneratedFunction& FunctionInfo, int FunctionInstanceIndex, FString& OutHLSL) override;
 #endif
 
+	virtual void ProvidePerInstanceDataForRenderThread(void* DataForRenderThread, void* PerInstanceData, const FNiagaraSystemInstanceID& SystemInstance) override;
+
 protected:
 	virtual bool CopyToInternal(UNiagaraDataInterface* Destination) const override;
 
@@ -125,6 +127,13 @@ struct FNiagaraDataInterfaceGVRMInstanceData
  */
 struct FNiagaraDataInterfaceGVRMProxy : public FNiagaraDataInterfaceProxy
 {
+	// GPU buffers (RHI resources)
+	FBufferRHIRef VertexPositionsBuffer;
+	FBufferRHIRef VertexNormalsBuffer;
+	FBufferRHIRef BoneIndicesBuffer;
+	FBufferRHIRef BoneWeightsBuffer;
+	FBufferRHIRef BoneMatricesBuffer;
+
 	// Shader resource views for GPU access
 	FShaderResourceViewRHIRef VertexPositionsSRV;
 	FShaderResourceViewRHIRef VertexNormalsSRV;
@@ -139,4 +148,14 @@ struct FNiagaraDataInterfaceGVRMProxy : public FNiagaraDataInterfaceProxy
 
 	virtual void PreStage(const FNDIGpuComputePreStageContext& Context) override;
 	virtual void PostStage(const FNDIGpuComputePostStageContext& Context) override;
+
+	// Destructor to clean up GPU resources
+	virtual ~FNiagaraDataInterfaceGVRMProxy()
+	{
+		VertexPositionsBuffer.SafeRelease();
+		VertexNormalsBuffer.SafeRelease();
+		BoneIndicesBuffer.SafeRelease();
+		BoneWeightsBuffer.SafeRelease();
+		BoneMatricesBuffer.SafeRelease();
+	}
 };

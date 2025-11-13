@@ -454,13 +454,151 @@ void FNiagaraDataInterfaceGVRMInstanceData::UpdateCache(USkeletalMeshComponent* 
 	bCacheValid = true;
 }
 
-// GPU proxy implementations (stubs for now, will be implemented in Phase 3)
+// GPU Proxy - called before Niagara simulation on GPU
 void FNiagaraDataInterfaceGVRMProxy::PreStage(const FNDIGpuComputePreStageContext& Context)
 {
-	// TODO: Upload buffers to GPU
+	// No per-stage work needed - buffers are set in ProvidePerInstanceDataForRenderThread
+	// and bound via GetParameterDefinitionHLSL
 }
 
+// GPU Proxy - called after Niagara simulation on GPU
 void FNiagaraDataInterfaceGVRMProxy::PostStage(const FNDIGpuComputePostStageContext& Context)
 {
-	// TODO: Cleanup GPU resources
+	// No per-stage cleanup needed - resources managed by proxy lifetime
 }
+
+// Provide per-instance data for render thread
+void UNiagaraDataInterfaceGVRM::ProvidePerInstanceDataForRenderThread(void* DataForRenderThread, void* PerInstanceData, const FNiagaraSystemInstanceID& SystemInstance)
+{
+	FNiagaraDataInterfaceGVRMInstanceData* SourceData = static_cast<FNiagaraDataInterfaceGVRMInstanceData*>(PerInstanceData);
+	FNiagaraDataInterfaceGVRMProxy* TargetProxy = static_cast<FNiagaraDataInterfaceGVRMProxy*>(DataForRenderThread);
+
+	if (!SourceData || !SourceData->bCacheValid)
+	{
+		return;
+	}
+
+	// Copy buffer dimensions
+	TargetProxy->NumVertices = SourceData->NumVertices;
+	TargetProxy->NumBones = SourceData->NumBones;
+	TargetProxy->MaxBoneInfluences = MaxBoneInfluences;
+
+	// Copy data to local variables for safe capture (avoid cross-thread pointer access)
+	TArray<FVector3f> VertexPositions = SourceData->CachedVertexPositions;
+	TArray<FVector3f> VertexNormals = SourceData->CachedVertexNormals;
+	TArray<FIntVector4> BoneIndices = SourceData->CachedBoneIndices;
+	TArray<FVector4f> BoneWeights = SourceData->CachedBoneWeights;
+	TArray<FMatrix44f> BoneMatrices = SourceData->CachedBoneMatrices;
+
+	// Create GPU buffers on render thread
+	ENQUEUE_RENDER_COMMAND(UpdateGVRMGPUBuffers)(
+		[TargetProxy, VertexPositions, VertexNormals, BoneIndices, BoneWeights, BoneMatrices](FRHICommandListImmediate& RHICmdList)
+		{
+			// Upload vertex positions
+			if (VertexPositions.Num() > 0)
+			{
+				FRHIResourceCreateInfo CreateInfo(TEXT("GVRMVertexPositions"));
+				TargetProxy->VertexPositionsBuffer = RHICreateVertexBuffer(
+					VertexPositions.Num() * sizeof(FVector3f),
+					BUF_ShaderResource | BUF_Dynamic,
+					CreateInfo
+				);
+
+				void* BufferData = RHILockBuffer(TargetProxy->VertexPositionsBuffer, 0,
+					VertexPositions.Num() * sizeof(FVector3f), RLM_WriteOnly);
+				FMemory::Memcpy(BufferData, VertexPositions.GetData(),
+					VertexPositions.Num() * sizeof(FVector3f));
+				RHIUnlockBuffer(TargetProxy->VertexPositionsBuffer);
+
+				TargetProxy->VertexPositionsSRV = RHICreateShaderResourceView(
+					TargetProxy->VertexPositionsBuffer, sizeof(FVector3f), PF_R32_FLOAT
+				);
+			}
+
+			// Upload vertex normals
+			if (VertexNormals.Num() > 0)
+			{
+				FRHIResourceCreateInfo CreateInfo(TEXT("GVRMVertexNormals"));
+				TargetProxy->VertexNormalsBuffer = RHICreateVertexBuffer(
+					VertexNormals.Num() * sizeof(FVector3f),
+					BUF_ShaderResource | BUF_Dynamic,
+					CreateInfo
+				);
+
+				void* BufferData = RHILockBuffer(TargetProxy->VertexNormalsBuffer, 0,
+					VertexNormals.Num() * sizeof(FVector3f), RLM_WriteOnly);
+				FMemory::Memcpy(BufferData, VertexNormals.GetData(),
+					VertexNormals.Num() * sizeof(FVector3f));
+				RHIUnlockBuffer(TargetProxy->VertexNormalsBuffer);
+
+				TargetProxy->VertexNormalsSRV = RHICreateShaderResourceView(
+					TargetProxy->VertexNormalsBuffer, sizeof(FVector3f), PF_R32_FLOAT
+				);
+			}
+
+			// Upload bone indices
+			if (BoneIndices.Num() > 0)
+			{
+				FRHIResourceCreateInfo CreateInfo(TEXT("GVRMBoneIndices"));
+				TargetProxy->BoneIndicesBuffer = RHICreateVertexBuffer(
+					BoneIndices.Num() * sizeof(FIntVector4),
+					BUF_ShaderResource | BUF_Dynamic,
+					CreateInfo
+				);
+
+				void* BufferData = RHILockBuffer(TargetProxy->BoneIndicesBuffer, 0,
+					BoneIndices.Num() * sizeof(FIntVector4), RLM_WriteOnly);
+				FMemory::Memcpy(BufferData, BoneIndices.GetData(),
+					BoneIndices.Num() * sizeof(FIntVector4));
+				RHIUnlockBuffer(TargetProxy->BoneIndicesBuffer);
+
+				TargetProxy->BoneIndicesSRV = RHICreateShaderResourceView(
+					TargetProxy->BoneIndicesBuffer, sizeof(int32), PF_R32_SINT
+				);
+			}
+
+			// Upload bone weights
+			if (BoneWeights.Num() > 0)
+			{
+				FRHIResourceCreateInfo CreateInfo(TEXT("GVRMBoneWeights"));
+				TargetProxy->BoneWeightsBuffer = RHICreateVertexBuffer(
+					BoneWeights.Num() * sizeof(FVector4f),
+					BUF_ShaderResource | BUF_Dynamic,
+					CreateInfo
+				);
+
+				void* BufferData = RHILockBuffer(TargetProxy->BoneWeightsBuffer, 0,
+					BoneWeights.Num() * sizeof(FVector4f), RLM_WriteOnly);
+				FMemory::Memcpy(BufferData, BoneWeights.GetData(),
+					BoneWeights.Num() * sizeof(FVector4f));
+				RHIUnlockBuffer(TargetProxy->BoneWeightsBuffer);
+
+				TargetProxy->BoneWeightsSRV = RHICreateShaderResourceView(
+					TargetProxy->BoneWeightsBuffer, sizeof(FVector4f), PF_A32B32G32R32F
+				);
+			}
+
+			// Upload bone matrices
+			if (BoneMatrices.Num() > 0)
+			{
+				FRHIResourceCreateInfo CreateInfo(TEXT("GVRMBoneMatrices"));
+				TargetProxy->BoneMatricesBuffer = RHICreateVertexBuffer(
+					BoneMatrices.Num() * sizeof(FMatrix44f),
+					BUF_ShaderResource | BUF_Dynamic,
+					CreateInfo
+				);
+
+				void* BufferData = RHILockBuffer(TargetProxy->BoneMatricesBuffer, 0,
+					BoneMatrices.Num() * sizeof(FMatrix44f), RLM_WriteOnly);
+				FMemory::Memcpy(BufferData, BoneMatrices.GetData(),
+					BoneMatrices.Num() * sizeof(FMatrix44f));
+				RHIUnlockBuffer(TargetProxy->BoneMatricesBuffer);
+
+				TargetProxy->BoneMatricesSRV = RHICreateShaderResourceView(
+					TargetProxy->BoneMatricesBuffer, sizeof(FMatrix44f), PF_A32B32G32R32F
+				);
+			}
+		}
+	);
+}
+
